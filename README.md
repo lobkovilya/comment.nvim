@@ -62,6 +62,7 @@ Type one or more lines between the top and bottom markers, then leave insert mod
 ```lua
 require("comment").setup({
   signs = true,
+  trim_leading_whitespace = true,
   range_signs = {
     single = "◆",
     top = "╭",

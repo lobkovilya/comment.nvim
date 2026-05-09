@@ -4,6 +4,7 @@ local ns = vim.api.nvim_create_namespace("comment.nvim")
 
 local config = {
   signs = true,
+  trim_leading_whitespace = true,
   range_signs = {
     single = "◆",
     top = "╭",
@@ -132,6 +133,9 @@ local function clean_edit_lines(lines)
 
   for _, line in ipairs(lines) do
     line = line:gsub("^%s*│%s?", "", 1)
+    if config.trim_leading_whitespace then
+      line = line:gsub("^%s+", "", 1)
+    end
     table.insert(cleaned, line)
   end
 
@@ -190,7 +194,7 @@ local function render_lines(item, end_line)
   end
   width = math.min(width, max_width)
 
-  local top_fill = math.max(width - display_width(title), 0)
+  local top_fill = math.max(width + 1 - display_width(title), 0)
   local lines = {
     {
       { box.indent .. box.bottom_left .. box.horizontal .. " " .. range_label(item.start_line, end_line), border_hl() },
@@ -213,6 +217,20 @@ local function render_lines(item, end_line)
   })
 
   return lines
+end
+
+local function edit_markers(start_line, end_line)
+  local start_title = " comment.nvim " .. range_label(start_line, end_line) .. " "
+  local end_title = " comment.nvim end "
+  local width = math.max(display_width(start_title), display_width(end_title))
+  local start_fill = math.max(width + 1 - display_width(start_title), 0)
+  local end_fill = math.max(width + 1 - display_width(end_title), 0)
+
+  return {
+    start = "╭─" .. start_title .. string.rep("─", start_fill) .. "╮",
+    body = "│ ",
+    finish = "╰─" .. end_title .. string.rep("─", end_fill) .. "╯",
+  }
 end
 
 local function render(bufnr)
@@ -290,6 +308,91 @@ local function remove_editing_lines(bufnr, edit)
   end
 end
 
+local function find_edit_end_line(bufnr, edit)
+  local last_line = vim.api.nvim_buf_line_count(bufnr)
+
+  for lnum = edit.start_edit_line, last_line do
+    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
+    if line == edit.end_marker then
+      return lnum
+    end
+  end
+
+  return edit.end_edit_line
+end
+
+local function normalize_edit_text(line, body_marker)
+  line = line:gsub("^%s*│%s?", "", 1)
+  if config.trim_leading_whitespace then
+    line = line:gsub("^%s+", "", 1)
+  end
+  return body_marker .. line
+end
+
+local function normalize_edit_block(bufnr)
+  local buf_state = get_buf_state(bufnr)
+  local edit = buf_state.editing
+
+  if not edit or edit.normalizing or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local end_edit_line = find_edit_end_line(bufnr, edit)
+  if not end_edit_line or end_edit_line <= edit.start_edit_line + 1 then
+    return
+  end
+
+  edit.normalizing = true
+
+  local winid = edit.winid
+  local cursor = winid and vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_cursor(winid) or nil
+  local changed_cursor_line = false
+  local cursor_delta = 0
+
+  for lnum = edit.start_edit_line + 1, end_edit_line - 1 do
+    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
+    local normalized = normalize_edit_text(line, edit.body_marker)
+
+    if line ~= normalized then
+      vim.api.nvim_buf_set_lines(bufnr, lnum - 1, lnum, false, { normalized })
+
+      if cursor and cursor[1] == lnum then
+        changed_cursor_line = true
+        cursor_delta = cursor_delta + (#normalized - #line)
+      end
+    end
+  end
+
+  if cursor and changed_cursor_line and vim.api.nvim_win_is_valid(winid) then
+    local line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], false)[1] or ""
+    local col = math.max(#edit.body_marker, cursor[2] + cursor_delta)
+    col = math.min(col, #line)
+    vim.api.nvim_win_set_cursor(winid, { cursor[1], col })
+  end
+
+  edit.normalizing = false
+end
+
+local function remove_edit_keymaps(bufnr, edit)
+  if not edit or not edit.keymaps then
+    return
+  end
+
+  for _, lhs in ipairs(edit.keymaps) do
+    pcall(vim.keymap.del, "i", lhs, { buffer = bufnr })
+  end
+end
+
+local function restore_edit_options(bufnr, edit)
+  if not edit or not edit.options then
+    return
+  end
+
+  for name, value in pairs(edit.options) do
+    pcall(vim.api.nvim_set_option_value, name, value, { buf = bufnr })
+  end
+end
+
 local function finish_edit(bufnr, save)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local buf_state = get_buf_state(bufnr)
@@ -301,16 +404,9 @@ local function finish_edit(bufnr, save)
 
   local lines = {}
   if vim.api.nvim_buf_is_valid(bufnr) then
-    local last_line = vim.api.nvim_buf_line_count(bufnr)
-    local end_edit_line = edit.end_edit_line
+    normalize_edit_block(bufnr)
 
-    for lnum = edit.start_edit_line, last_line do
-      local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
-      if line == edit.end_marker then
-        end_edit_line = lnum
-        break
-      end
-    end
+    local end_edit_line = find_edit_end_line(bufnr, edit)
 
     if end_edit_line and end_edit_line > edit.start_edit_line + 1 then
       lines = vim.api.nvim_buf_get_lines(bufnr, edit.start_edit_line, end_edit_line - 1, false)
@@ -318,6 +414,8 @@ local function finish_edit(bufnr, save)
   end
 
   remove_editing_lines(bufnr, edit)
+  remove_edit_keymaps(bufnr, edit)
+  restore_edit_options(bufnr, edit)
 
   if save then
     lines = clean_edit_lines(lines)
@@ -351,16 +449,27 @@ local function start_edit(bufnr, start_line, end_line)
   start_line, end_line = normalize_range(bufnr, start_line, end_line)
   local insert_index = end_line
   local insert_line = end_line + 1
-  local start_marker = "╭─ comment.nvim " .. range_label(start_line, end_line) .. " ─╮"
-  local body_marker = "│ "
-  local end_marker = "╰─ comment.nvim end ─╯"
+  local markers = edit_markers(start_line, end_line)
+  local cr_keys = vim.api.nvim_replace_termcodes("<CR><C-u>" .. markers.body, true, false, true)
+  local edit_options = {
+    autoindent = vim.api.nvim_get_option_value("autoindent", { buf = bufnr }),
+    cindent = vim.api.nvim_get_option_value("cindent", { buf = bufnr }),
+    indentexpr = vim.api.nvim_get_option_value("indentexpr", { buf = bufnr }),
+    smartindent = vim.api.nvim_get_option_value("smartindent", { buf = bufnr }),
+  }
 
   vim.api.nvim_buf_set_lines(bufnr, insert_index, insert_index, false, {
-    start_marker,
-    body_marker,
-    end_marker,
+    markers.start,
+    markers.body,
+    markers.finish,
   })
-  vim.api.nvim_win_set_cursor(0, { insert_line + 1, #body_marker })
+
+  vim.api.nvim_set_option_value("autoindent", false, { buf = bufnr })
+  vim.api.nvim_set_option_value("cindent", false, { buf = bufnr })
+  vim.api.nvim_set_option_value("indentexpr", "", { buf = bufnr })
+  vim.api.nvim_set_option_value("smartindent", false, { buf = bufnr })
+
+  vim.api.nvim_win_set_cursor(0, { insert_line + 1, #markers.body })
   vim.cmd("startinsert!")
 
   local augroup = vim.api.nvim_create_augroup("CommentNvimEdit" .. bufnr, { clear = true })
@@ -371,11 +480,31 @@ local function start_edit(bufnr, start_line, end_line)
     cursor_col = 0,
     end_line = end_line,
     end_edit_line = insert_line + 2,
-    end_marker = end_marker,
+    end_marker = markers.finish,
+    body_marker = markers.body,
+    keymaps = { "<CR>" },
+    options = edit_options,
     start_edit_line = insert_line,
     start_line = start_line,
     winid = vim.api.nvim_get_current_win(),
   }
+
+  vim.keymap.set("i", "<CR>", function()
+    return cr_keys
+  end, {
+    buffer = bufnr,
+    desc = "Add aligned comment line",
+    expr = true,
+    replace_keycodes = true,
+  })
+
+  vim.api.nvim_create_autocmd("TextChangedI", {
+    group = augroup,
+    buffer = bufnr,
+    callback = function()
+      normalize_edit_block(bufnr)
+    end,
+  })
 
   vim.api.nvim_create_autocmd("InsertLeave", {
     group = augroup,
@@ -441,6 +570,7 @@ end
 function M.clear()
   local bufnr = vim.api.nvim_get_current_buf()
   local buf_state = get_buf_state(bufnr)
+  remove_edit_keymaps(bufnr, buf_state.editing)
   buf_state.comments = {}
   buf_state.editing = nil
   render(bufnr)

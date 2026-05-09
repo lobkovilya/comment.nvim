@@ -47,6 +47,7 @@ CONFIGURATION                                               *comment.nvim-config
 >
 require("comment").setup({
   signs = true,
+  trim_leading_whitespace = true,
   range_signs = {
     single = "◆",
     top = "╭",
