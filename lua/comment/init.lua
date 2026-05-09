@@ -3,7 +3,11 @@ local M = {}
 local ns = vim.api.nvim_create_namespace("comment.nvim")
 
 local config = {
+  comment_position = "below",
+  comment_connector = true,
   signs = true,
+  range_highlight = false,
+  range_highlight_priority = 180,
   trim_leading_whitespace = true,
   range_signs = {
     single = "◆",
@@ -30,6 +34,16 @@ local config = {
 
 local state = {
   buffers = {},
+  user_highlights = {},
+}
+
+local default_highlights = {
+  CommentNvimBorder = { fg = "#9e917e", bg = "#4a3728" },
+  CommentNvimRange = { bg = "#4a3728" },
+  CommentNvimRangeNumber = { fg = "#ffd166", bg = "#4a3728", bold = true },
+  CommentNvimRangeText = { bg = "#5a402d" },
+  CommentNvimSign = { link = "Comment" },
+  CommentNvimText = { fg = "#b8afa3", bg = "#4a3728" },
 }
 
 local function get_buf_state(bufnr)
@@ -59,8 +73,34 @@ local function normalize_range(bufnr, start_line, end_line)
   return start_line, end_line
 end
 
+local function remember_user_highlights()
+  for group, _ in pairs(default_highlights) do
+    state.user_highlights[group] = vim.fn.hlexists(group) == 1
+  end
+end
+
+local function apply_highlights()
+  for group, value in pairs(default_highlights) do
+    if not state.user_highlights[group] then
+      vim.api.nvim_set_hl(0, group, value)
+    end
+  end
+end
+
 local function sign_hl()
   return vim.fn.hlexists("CommentNvimSign") == 1 and "CommentNvimSign" or "Comment"
+end
+
+local function range_hl()
+  return vim.fn.hlexists("CommentNvimRange") == 1 and "CommentNvimRange" or nil
+end
+
+local function range_number_hl()
+  return vim.fn.hlexists("CommentNvimRangeNumber") == 1 and "CommentNvimRangeNumber" or nil
+end
+
+local function range_text_hl()
+  return vim.fn.hlexists("CommentNvimRangeText") == 1 and "CommentNvimRangeText" or nil
 end
 
 local function text_hl()
@@ -78,12 +118,16 @@ local function range_label(start_line, end_line)
   return string.format("lines %d-%d", start_line, end_line)
 end
 
-local function sign_for_line(start_line, end_line, lnum)
+local function sign_for_line(start_line, end_line, lnum, continues_to_comment)
   if config.sign_text then
     return config.sign_text
   end
 
   local signs = config.range_signs or {}
+  if continues_to_comment then
+    return signs.middle or "│"
+  end
+
   if start_line == end_line then
     return signs.single or "◆"
   end
@@ -197,9 +241,6 @@ local function render_lines(item, end_line)
   local top_fill = math.max(width + 1 - display_width(title), 0)
   local lines = {
     {
-      { box.indent .. box.bottom_left .. box.horizontal .. " " .. range_label(item.start_line, end_line), border_hl() },
-    },
-    {
       { box.indent .. box.top_left .. box.horizontal .. title .. string.rep(box.horizontal, top_fill) .. box.top_right, border_hl() },
     },
   }
@@ -214,6 +255,102 @@ local function render_lines(item, end_line)
 
   table.insert(lines, {
     { box.indent .. box.bottom_left .. string.rep(box.horizontal, width + 2) .. box.bottom_right, border_hl() },
+  })
+
+  return lines
+end
+
+local function text_offset()
+  local ok, info = pcall(vim.fn.getwininfo, vim.api.nvim_get_current_win())
+  if ok and info and info[1] and info[1].textoff then
+    return info[1].textoff
+  end
+
+  return 0
+end
+
+local function connected_layout(item, end_line, bufnr)
+  local box = config.box
+  local offset = math.max(text_offset(), 0)
+  local indent_width = display_width(box.indent or "")
+  local max_width = math.max(config.max_width or 72, 24)
+  local title = " comment " .. range_label(item.start_line, end_line) .. " "
+  local body = {}
+
+  for _, line in ipairs(item.lines or {}) do
+    local wrapped = split_for_width(line, max_width)
+    for _, wrapped_line in ipairs(wrapped) do
+      table.insert(body, wrapped_line)
+    end
+  end
+
+  if #body == 0 then
+    table.insert(body, "")
+  end
+
+  local width = display_width(title)
+  for _, line in ipairs(body) do
+    width = math.max(width, display_width(line))
+  end
+  width = math.min(width, max_width)
+
+  local code_width = 0
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    local lines = vim.api.nvim_buf_get_lines(bufnr, item.start_line - 1, end_line, false)
+    for _, line in ipairs(lines) do
+      code_width = math.max(code_width, display_width(line))
+    end
+  end
+
+  local content_prefix_width = offset + indent_width + 2
+  local bridge_width = offset + indent_width
+  local top_bridge = string.rep(box.horizontal, bridge_width)
+  local total_inner_width = math.max(offset + indent_width + width + 2, offset + code_width + 1)
+  local top_fill = math.max(total_inner_width - display_width(title) - display_width(top_bridge), 0)
+  local body_width = math.max(total_inner_width - content_prefix_width, width)
+
+  return {
+    body_width = body_width,
+    body = body,
+    box = box,
+    content_prefix_width = content_prefix_width,
+    title = title,
+    top_bridge = top_bridge,
+    top_fill = top_fill,
+    total_inner_width = total_inner_width,
+    width = width,
+  }
+end
+
+local function connected_top_lines(item, end_line, bufnr)
+  local layout = connected_layout(item, end_line, bufnr)
+
+  return {
+    {
+      { layout.box.top_left .. string.rep(layout.box.horizontal, layout.total_inner_width) .. layout.box.top_right, border_hl() },
+    },
+  }
+end
+
+local function connected_render_lines(item, end_line, bufnr)
+  local layout = connected_layout(item, end_line, bufnr)
+  local box = layout.box
+  local lines = {
+    {
+      { box.vertical .. layout.top_bridge .. layout.title .. string.rep(box.horizontal, layout.top_fill) .. box.top_right, border_hl() },
+    },
+  }
+
+  for _, line in ipairs(layout.body) do
+    table.insert(lines, {
+      { box.vertical .. string.rep(" ", math.max(layout.content_prefix_width - 1, 0)), border_hl() },
+      { pad_right(line, layout.body_width), text_hl() },
+      { " " .. box.vertical, border_hl() },
+    })
+  end
+
+  table.insert(lines, {
+    { box.bottom_left .. string.rep(box.horizontal, layout.total_inner_width) .. box.bottom_right, border_hl() },
   })
 
   return lines
@@ -251,18 +388,68 @@ local function render(bufnr)
     if item.start_line <= line_count then
       local end_line = math.min(item.end_line, line_count)
 
-      vim.api.nvim_buf_set_extmark(bufnr, ns, end_line - 1, 0, {
-        virt_lines = render_lines(item, end_line),
-        virt_lines_above = false,
+      local anchor_line = config.comment_position == "below" and end_line or item.start_line
+      local lines = render_lines(item, end_line)
+      local use_connector = config.comment_connector and config.comment_position == "below"
+
+      if use_connector then
+        vim.api.nvim_buf_set_extmark(bufnr, ns, item.start_line - 1, 0, {
+          virt_lines = connected_top_lines(item, end_line, bufnr),
+          virt_lines_above = true,
+          virt_lines_leftcol = true,
+          right_gravity = false,
+        })
+      end
+
+      vim.api.nvim_buf_set_extmark(bufnr, ns, anchor_line - 1, 0, {
+        virt_lines = use_connector and connected_render_lines(item, end_line, bufnr) or lines,
+        virt_lines_above = config.comment_position ~= "below",
+        virt_lines_leftcol = use_connector,
         right_gravity = false,
       })
 
       if config.signs then
         for lnum = item.start_line, end_line do
-          vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
-            sign_text = sign_for_line(item.start_line, end_line, lnum),
+          local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
+          local opts = {
+            sign_text = sign_for_line(item.start_line, end_line, lnum, use_connector),
             sign_hl_group = sign_hl(),
+          }
+
+          if config.range_highlight then
+            opts.line_hl_group = range_hl()
+            opts.number_hl_group = range_number_hl()
+            opts.priority = config.range_highlight_priority
+          end
+
+          vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, opts)
+
+          if config.range_highlight and line ~= "" then
+            vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+              end_col = #line,
+              hl_eol = true,
+              hl_group = range_text_hl(),
+              priority = config.range_highlight_priority,
+            })
+          end
+        end
+      elseif config.range_highlight then
+        for lnum = item.start_line, end_line do
+          local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
+          vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+            line_hl_group = range_hl(),
+            number_hl_group = range_number_hl(),
+            priority = config.range_highlight_priority,
           })
+
+          if line ~= "" then
+            vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+              end_col = #line,
+              hl_eol = true,
+              hl_group = range_text_hl(),
+              priority = config.range_highlight_priority,
+            })
+          end
         end
       end
     end
@@ -576,12 +763,50 @@ function M.clear()
   render(bufnr)
 end
 
+function M.debug()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+  local range_marks = 0
+  local text_marks = 0
+
+  for _, mark in ipairs(marks) do
+    local details = mark[4]
+    if details.line_hl_group == "CommentNvimRange" then
+      range_marks = range_marks + 1
+    end
+    if details.hl_group == "CommentNvimRangeText" then
+      text_marks = text_marks + 1
+    end
+  end
+
+  vim.notify(
+    string.format(
+      "comment.nvim range=%s range_hl=%s range_text_hl=%s range_marks=%d text_marks=%d",
+      tostring(config.range_highlight),
+      vim.inspect(vim.api.nvim_get_hl(0, { name = "CommentNvimRange" })),
+      vim.inspect(vim.api.nvim_get_hl(0, { name = "CommentNvimRangeText" })),
+      range_marks,
+      text_marks
+    ),
+    vim.log.levels.INFO
+  )
+end
+
 function M.setup(opts)
   config = vim.tbl_deep_extend("force", config, opts or {})
 
-  vim.api.nvim_set_hl(0, "CommentNvimBorder", { default = true, link = "Comment" })
-  vim.api.nvim_set_hl(0, "CommentNvimSign", { default = true, link = "Comment" })
-  vim.api.nvim_set_hl(0, "CommentNvimText", { default = true, link = "Comment" })
+  remember_user_highlights()
+  apply_highlights()
+
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = vim.api.nvim_create_augroup("CommentNvimHighlights", { clear = true }),
+    callback = function()
+      apply_highlights()
+      for bufnr, _ in pairs(state.buffers) do
+        render(bufnr)
+      end
+    end,
+  })
 
   vim.api.nvim_create_user_command("CommentAdd", function()
     M.add_line()
@@ -609,6 +834,10 @@ function M.setup(opts)
 
   vim.api.nvim_create_user_command("CommentClear", function()
     M.clear()
+  end, {})
+
+  vim.api.nvim_create_user_command("CommentDebug", function()
+    M.debug()
   end, {})
 
   if config.mappings then

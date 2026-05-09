@@ -2,7 +2,7 @@
 
 Ephemeral in-buffer comments for Neovim.
 
-This plugin lets you attach a multi-line comment to a single line or visual line range. Comments are rendered in the buffer with a quiet sign-column range bracket and a muted virtual-line bezel, can be shown or hidden, and are kept only in memory for the current Neovim session.
+This plugin lets you attach a multi-line comment to a single line or visual line range. Comments are rendered in the buffer with a subtle covered-line tint, a quiet sign-column range bracket, and a muted virtual-line bezel. They can be shown or hidden, and are kept only in memory for the current Neovim session.
 
 Persistence is intentionally not implemented yet.
 
@@ -45,6 +45,7 @@ Commands:
 :CommentHide
 :CommentDelete
 :CommentClear
+:CommentDebug
 ```
 
 When adding a comment, a small editable block is inserted directly below the target line or range:
@@ -61,7 +62,11 @@ Type one or more lines between the top and bottom markers, then leave insert mod
 
 ```lua
 require("comment").setup({
+  comment_position = "below",
+  comment_connector = true,
   signs = true,
+  range_highlight = false,
+  range_highlight_priority = 180,
   trim_leading_whitespace = true,
   range_signs = {
     single = "◆",
@@ -93,6 +98,11 @@ Highlight groups:
 
 ```vim
 CommentNvimBorder
+CommentNvimRange
+CommentNvimRangeNumber
+CommentNvimRangeText
 CommentNvimSign
 CommentNvimText
 ```
+
+The built-in highlight defaults are re-applied after `ColorScheme` changes. Define any of these groups before calling `setup()` to take ownership of that group yourself.
