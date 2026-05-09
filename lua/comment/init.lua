@@ -5,7 +5,16 @@ local ns = vim.api.nvim_create_namespace("comment.nvim")
 local config = {
   signs = true,
   sign_text = "C",
-  virtual_line_prefix = "  comment ",
+  max_width = 72,
+  box = {
+    indent = "  ",
+    top_left = "╭",
+    top_right = "╮",
+    bottom_left = "╰",
+    bottom_right = "╯",
+    horizontal = "─",
+    vertical = "│",
+  },
   mappings = {
     add = "<leader>ca",
     toggle = "<leader>ct",
@@ -52,12 +61,127 @@ local function text_hl()
   return vim.fn.hlexists("CommentNvimText") == 1 and "CommentNvimText" or "Comment"
 end
 
-local function compact_comment_text(text)
-  text = vim.trim(text or "")
-  if text == "" then
-    return ""
+local function border_hl()
+  return vim.fn.hlexists("CommentNvimBorder") == 1 and "CommentNvimBorder" or text_hl()
+end
+
+local function display_width(text)
+  return vim.fn.strdisplaywidth(text or "")
+end
+
+local function pad_right(text, width)
+  local padding = width - display_width(text)
+  if padding <= 0 then
+    return text
   end
-  return text:gsub("\n+", " ")
+  return text .. string.rep(" ", padding)
+end
+
+local function trim_empty_edges(lines)
+  local first = 1
+  local last = #lines
+
+  while first <= last and vim.trim(lines[first]) == "" do
+    first = first + 1
+  end
+
+  while last >= first and vim.trim(lines[last]) == "" do
+    last = last - 1
+  end
+
+  local trimmed = {}
+  for index = first, last do
+    table.insert(trimmed, lines[index])
+  end
+
+  return trimmed
+end
+
+local function clean_edit_lines(lines)
+  local cleaned = {}
+
+  for _, line in ipairs(lines) do
+    line = line:gsub("^%s*│%s?", "", 1)
+    table.insert(cleaned, line)
+  end
+
+  return trim_empty_edges(cleaned)
+end
+
+local function split_for_width(text, width)
+  if width <= 8 or display_width(text) <= width then
+    return { text }
+  end
+
+  local chunks = {}
+  local current = ""
+
+  for word in tostring(text):gmatch("%S+%s*") do
+    local candidate = current .. word
+    if current ~= "" and display_width(candidate) > width then
+      table.insert(chunks, vim.trim(current))
+      current = word
+    else
+      current = candidate
+    end
+  end
+
+  if current ~= "" then
+    table.insert(chunks, vim.trim(current))
+  end
+
+  if #chunks == 0 then
+    table.insert(chunks, text)
+  end
+
+  return chunks
+end
+
+local function render_lines(item, end_line)
+  local box = config.box
+  local max_width = math.max(config.max_width or 72, 24)
+  local label = item.start_line == end_line and tostring(item.start_line)
+    or string.format("%d-%d", item.start_line, end_line)
+  local title = " comment " .. label .. " "
+  local body = {}
+
+  for _, line in ipairs(item.lines or {}) do
+    local wrapped = split_for_width(line, max_width)
+    for _, wrapped_line in ipairs(wrapped) do
+      table.insert(body, wrapped_line)
+    end
+  end
+
+  if #body == 0 then
+    table.insert(body, "")
+  end
+
+  local width = display_width(title)
+  for _, line in ipairs(body) do
+    width = math.max(width, display_width(line))
+  end
+  width = math.min(width, max_width)
+
+  local top_fill = math.max(width - display_width(title), 0)
+  local lines = {
+    {
+      { box.indent .. box.top_left .. box.horizontal .. title .. string.rep(box.horizontal, top_fill) .. box.top_right, border_hl() },
+    },
+  }
+
+  for _, line in ipairs(body) do
+    table.insert(lines, {
+      { box.indent .. box.vertical .. " ", border_hl() },
+      { pad_right(line, width), text_hl() },
+      { " " .. box.vertical, border_hl() },
+    })
+  end
+
+  table.insert(lines, {
+    { box.indent .. box.bottom_left .. string.rep(box.horizontal, width + 2) .. box.bottom_right, border_hl() },
+  })
+
+  return lines
 end
 
 local function render(bufnr)
@@ -77,16 +201,9 @@ local function render(bufnr)
     local line_count = vim.api.nvim_buf_line_count(bufnr)
     if item.start_line <= line_count then
       local end_line = math.min(item.end_line, line_count)
-      local line_label = item.start_line == end_line and tostring(item.start_line)
-        or string.format("%d-%d", item.start_line, end_line)
-      local virtual_text = config.virtual_line_prefix .. line_label .. ": " .. item.text
 
       vim.api.nvim_buf_set_extmark(bufnr, ns, end_line - 1, 0, {
-        virt_lines = {
-          {
-            { virtual_text, text_hl() },
-          },
-        },
+        virt_lines = render_lines(item, end_line),
         virt_lines_above = false,
         right_gravity = false,
       })
@@ -124,13 +241,21 @@ local function remove_editing_lines(bufnr, edit)
   end
 
   local last_line = vim.api.nvim_buf_line_count(bufnr)
-  if edit.insert_line < 1 or edit.insert_line > last_line then
+  if edit.start_edit_line < 1 or edit.start_edit_line > last_line then
     return
   end
 
-  local ok = vim.api.nvim_buf_get_lines(bufnr, edit.insert_line - 1, edit.insert_line, false)
-  if ok[1] and ok[1]:sub(1, #edit.marker) == edit.marker then
-    vim.api.nvim_buf_set_lines(bufnr, edit.insert_line - 1, edit.insert_line, false, {})
+  local end_edit_line = edit.end_edit_line
+  for lnum = edit.start_edit_line, last_line do
+    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
+    if line == edit.end_marker then
+      end_edit_line = lnum
+      break
+    end
+  end
+
+  if end_edit_line and end_edit_line <= last_line then
+    vim.api.nvim_buf_set_lines(bufnr, edit.start_edit_line - 1, end_edit_line, false, {})
   end
 end
 
@@ -143,21 +268,34 @@ local function finish_edit(bufnr, save)
     return
   end
 
-  local line = ""
-  if vim.api.nvim_buf_is_valid(bufnr) and edit.insert_line <= vim.api.nvim_buf_line_count(bufnr) then
-    line = vim.api.nvim_buf_get_lines(bufnr, edit.insert_line - 1, edit.insert_line, false)[1] or ""
+  local lines = {}
+  if vim.api.nvim_buf_is_valid(bufnr) then
+    local last_line = vim.api.nvim_buf_line_count(bufnr)
+    local end_edit_line = edit.end_edit_line
+
+    for lnum = edit.start_edit_line, last_line do
+      local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
+      if line == edit.end_marker then
+        end_edit_line = lnum
+        break
+      end
+    end
+
+    if end_edit_line and end_edit_line > edit.start_edit_line + 1 then
+      lines = vim.api.nvim_buf_get_lines(bufnr, edit.start_edit_line, end_edit_line - 1, false)
+    end
   end
 
   remove_editing_lines(bufnr, edit)
 
   if save then
-    local text = compact_comment_text(line:sub(#edit.marker + 1))
-    if text ~= "" then
+    lines = clean_edit_lines(lines)
+    if #lines > 0 then
       table.insert(buf_state.comments, {
         id = buf_state.next_id,
         start_line = edit.start_line,
         end_line = edit.end_line,
-        text = text,
+        lines = lines,
       })
       buf_state.next_id = buf_state.next_id + 1
       buf_state.visible = true
@@ -182,10 +320,17 @@ local function start_edit(bufnr, start_line, end_line)
   start_line, end_line = normalize_range(bufnr, start_line, end_line)
   local insert_index = end_line
   local insert_line = end_line + 1
-  local marker = "COMMENT: "
+  local range_label = start_line == end_line and tostring(start_line) or string.format("%d-%d", start_line, end_line)
+  local start_marker = "╭─ comment.nvim " .. range_label .. " ─╮"
+  local body_marker = "│ "
+  local end_marker = "╰─ comment.nvim end ─╯"
 
-  vim.api.nvim_buf_set_lines(bufnr, insert_index, insert_index, false, { marker })
-  vim.api.nvim_win_set_cursor(0, { insert_line, #marker })
+  vim.api.nvim_buf_set_lines(bufnr, insert_index, insert_index, false, {
+    start_marker,
+    body_marker,
+    end_marker,
+  })
+  vim.api.nvim_win_set_cursor(0, { insert_line + 1, #body_marker })
   vim.cmd("startinsert!")
 
   local augroup = vim.api.nvim_create_augroup("CommentNvimEdit" .. bufnr, { clear = true })
@@ -195,8 +340,9 @@ local function start_edit(bufnr, start_line, end_line)
     cursor_line = start_line,
     cursor_col = 0,
     end_line = end_line,
-    insert_line = insert_line,
-    marker = marker,
+    end_edit_line = insert_line + 2,
+    end_marker = end_marker,
+    start_edit_line = insert_line,
     start_line = start_line,
     winid = vim.api.nvim_get_current_win(),
   }
@@ -272,6 +418,10 @@ end
 
 function M.setup(opts)
   config = vim.tbl_deep_extend("force", config, opts or {})
+
+  vim.api.nvim_set_hl(0, "CommentNvimBorder", { default = true, link = "Comment" })
+  vim.api.nvim_set_hl(0, "CommentNvimSign", { default = true, link = "Comment" })
+  vim.api.nvim_set_hl(0, "CommentNvimText", { default = true, link = "Comment" })
 
   vim.api.nvim_create_user_command("CommentAdd", function()
     M.add_line()

@@ -2,7 +2,7 @@
 
 Ephemeral in-buffer comments for Neovim.
 
-This plugin lets you attach a comment to a single line or visual line range. Comments are rendered in the buffer with signs and virtual lines, can be shown or hidden, and are kept only in memory for the current Neovim session.
+This plugin lets you attach a multi-line comment to a single line or visual line range. Comments are rendered in the buffer with signs and a muted virtual-line bezel, can be shown or hidden, and are kept only in memory for the current Neovim session.
 
 Persistence is intentionally not implemented yet.
 
@@ -47,7 +47,15 @@ Commands:
 :CommentClear
 ```
 
-When adding a comment, `COMMENT: ` is inserted directly below the target line or range. Type the comment there and leave insert mode to save it. Empty comments are ignored.
+When adding a comment, a small editable block is inserted directly below the target line or range:
+
+```text
+╭─ comment.nvim 12 ─╮
+│
+╰─ comment.nvim end ─╯
+```
+
+Type one or more lines between the top and bottom markers, then leave insert mode to save it. Empty comments are ignored. The editable block is removed from the file and replaced with virtual-line rendering.
 
 ## Configuration
 
@@ -55,7 +63,16 @@ When adding a comment, `COMMENT: ` is inserted directly below the target line or
 require("comment").setup({
   signs = true,
   sign_text = "C",
-  virtual_line_prefix = "  comment ",
+  max_width = 72,
+  box = {
+    indent = "  ",
+    top_left = "╭",
+    top_right = "╮",
+    bottom_left = "╰",
+    bottom_right = "╯",
+    horizontal = "─",
+    vertical = "│",
+  },
   mappings = {
     add = "<leader>ca",
     toggle = "<leader>ct",
@@ -65,3 +82,11 @@ require("comment").setup({
 ```
 
 Set `mappings = false` to skip default mappings.
+
+Highlight groups:
+
+```vim
+CommentNvimBorder
+CommentNvimSign
+CommentNvimText
+```
