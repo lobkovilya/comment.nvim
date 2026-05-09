@@ -4,7 +4,12 @@ local ns = vim.api.nvim_create_namespace("comment.nvim")
 
 local config = {
   signs = true,
-  sign_text = "C",
+  range_signs = {
+    single = "◆",
+    top = "╭",
+    middle = "│",
+    bottom = "╰",
+  },
   max_width = 72,
   box = {
     indent = "  ",
@@ -63,6 +68,31 @@ end
 
 local function border_hl()
   return vim.fn.hlexists("CommentNvimBorder") == 1 and "CommentNvimBorder" or text_hl()
+end
+
+local function range_label(start_line, end_line)
+  if start_line == end_line then
+    return "line " .. start_line
+  end
+  return string.format("lines %d-%d", start_line, end_line)
+end
+
+local function sign_for_line(start_line, end_line, lnum)
+  if config.sign_text then
+    return config.sign_text
+  end
+
+  local signs = config.range_signs or {}
+  if start_line == end_line then
+    return signs.single or "◆"
+  end
+  if lnum == start_line then
+    return signs.top or "╭"
+  end
+  if lnum == end_line then
+    return signs.bottom or "╰"
+  end
+  return signs.middle or "│"
 end
 
 local function display_width(text)
@@ -140,9 +170,7 @@ end
 local function render_lines(item, end_line)
   local box = config.box
   local max_width = math.max(config.max_width or 72, 24)
-  local label = item.start_line == end_line and tostring(item.start_line)
-    or string.format("%d-%d", item.start_line, end_line)
-  local title = " comment " .. label .. " "
+  local title = " comment " .. range_label(item.start_line, end_line) .. " "
   local body = {}
 
   for _, line in ipairs(item.lines or {}) do
@@ -164,6 +192,9 @@ local function render_lines(item, end_line)
 
   local top_fill = math.max(width - display_width(title), 0)
   local lines = {
+    {
+      { box.indent .. box.bottom_left .. box.horizontal .. " " .. range_label(item.start_line, end_line), border_hl() },
+    },
     {
       { box.indent .. box.top_left .. box.horizontal .. title .. string.rep(box.horizontal, top_fill) .. box.top_right, border_hl() },
     },
@@ -211,7 +242,7 @@ local function render(bufnr)
       if config.signs then
         for lnum = item.start_line, end_line do
           vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
-            sign_text = config.sign_text,
+            sign_text = sign_for_line(item.start_line, end_line, lnum),
             sign_hl_group = sign_hl(),
           })
         end
@@ -320,8 +351,7 @@ local function start_edit(bufnr, start_line, end_line)
   start_line, end_line = normalize_range(bufnr, start_line, end_line)
   local insert_index = end_line
   local insert_line = end_line + 1
-  local range_label = start_line == end_line and tostring(start_line) or string.format("%d-%d", start_line, end_line)
-  local start_marker = "╭─ comment.nvim " .. range_label .. " ─╮"
+  local start_marker = "╭─ comment.nvim " .. range_label(start_line, end_line) .. " ─╮"
   local body_marker = "│ "
   local end_marker = "╰─ comment.nvim end ─╯"
 

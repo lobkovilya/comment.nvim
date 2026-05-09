@@ -4,9 +4,9 @@
 INTRODUCTION                                                *comment.nvim*
 
 comment.nvim adds visual, in-memory comments to a buffer. A multi-line comment
-can target one line or a line range. Comments are rendered with signs and a
-muted virtual-line bezel, and can be shown or hidden without changing the
-stored in-memory state.
+can target one line or a line range. Comments are rendered with a quiet
+sign-column range bracket and a muted virtual-line bezel, and can be shown or
+hidden without changing the stored in-memory state.
 
 Comments do not survive a Neovim restart.
 
@@ -47,7 +47,12 @@ CONFIGURATION                                               *comment.nvim-config
 >
 require("comment").setup({
   signs = true,
-  sign_text = "C",
+  range_signs = {
+    single = "◆",
+    top = "╭",
+    middle = "│",
+    bottom = "╰",
+  },
   max_width = 72,
   box = {
     indent = "  ",

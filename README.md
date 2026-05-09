@@ -2,7 +2,7 @@
 
 Ephemeral in-buffer comments for Neovim.
 
-This plugin lets you attach a multi-line comment to a single line or visual line range. Comments are rendered in the buffer with signs and a muted virtual-line bezel, can be shown or hidden, and are kept only in memory for the current Neovim session.
+This plugin lets you attach a multi-line comment to a single line or visual line range. Comments are rendered in the buffer with a quiet sign-column range bracket and a muted virtual-line bezel, can be shown or hidden, and are kept only in memory for the current Neovim session.
 
 Persistence is intentionally not implemented yet.
 
@@ -62,7 +62,12 @@ Type one or more lines between the top and bottom markers, then leave insert mod
 ```lua
 require("comment").setup({
   signs = true,
-  sign_text = "C",
+  range_signs = {
+    single = "◆",
+    top = "╭",
+    middle = "│",
+    bottom = "╰",
+  },
   max_width = 72,
   box = {
     indent = "  ",
