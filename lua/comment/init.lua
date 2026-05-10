@@ -784,7 +784,10 @@ end
 function M.add_visual()
   local start_pos = vim.fn.getpos("'<")
   local end_pos = vim.fn.getpos("'>")
-  M.add_range(start_pos[2], end_pos[2])
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  vim.schedule(function()
+    M.add_range(start_pos[2], end_pos[2])
+  end)
 end
 
 function M.toggle()

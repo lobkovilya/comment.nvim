@@ -40,10 +40,10 @@ For lazy-loading from your main plugin setup:
     "CommentDebug",
   },
   keys = {
-    { "<leader>ca", function() require("comment").add_line() end, desc = "Add comment" },
-    { "<leader>ca", function() require("comment").add_visual() end, mode = "x", desc = "Add comment to selection" },
-    { "<leader>ct", function() require("comment").toggle() end, desc = "Toggle comments" },
-    { "<leader>cd", function() require("comment").delete_at_cursor() end, desc = "Delete comment at cursor" },
+    { "<leader>ma", function() require("comment").add_line() end, desc = "Add comment" },
+    { "<leader>ma", function() require("comment").add_visual() end, mode = "x", desc = "Add comment to selection" },
+    { "<leader>mt", function() require("comment").toggle() end, desc = "Toggle comments" },
+    { "<leader>md", function() require("comment").delete_at_cursor() end, desc = "Delete comment at cursor" },
   },
   opts = {
     mappings = false,
