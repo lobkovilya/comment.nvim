@@ -98,13 +98,13 @@ require("comment").setup({
   range_highlight = false,
   range_highlight_priority = 180,
   trim_leading_whitespace = true,
+  comment_width = 120,
   range_signs = {
     single = "◆",
     top = "╭",
     middle = "│",
     bottom = "╰",
   },
-  max_width = 72,
   box = {
     indent = "  ",
     top_left = "╭",

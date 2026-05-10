@@ -12,13 +12,13 @@ local default_config = {
   range_highlight = false,
   range_highlight_priority = 180,
   trim_leading_whitespace = true,
+  comment_width = 120,
   range_signs = {
     single = "◆",
     top = "╭",
     middle = "│",
     bottom = "╰",
   },
-  max_width = 72,
   box = {
     indent = "  ",
     top_left = "╭",
@@ -150,6 +150,14 @@ local function display_width(text)
   return vim.fn.strdisplaywidth(text or "")
 end
 
+local function comment_width()
+  return math.max(config.comment_width or config.max_width or 120, 24)
+end
+
+local function comment_content_width()
+  return comment_width() - 4
+end
+
 local function escape_pattern(text)
   return tostring(text or ""):gsub("([^%w])", "%%%1")
 end
@@ -249,12 +257,12 @@ end
 
 local function render_lines(item, end_line)
   local box = config.box
-  local max_width = math.max(config.max_width or 72, 24)
+  local width = comment_content_width()
   local title = ""
   local body = {}
 
   for _, line in ipairs(item.lines or {}) do
-    local wrapped = split_for_width(line, max_width)
+    local wrapped = split_for_width(line, width)
     for _, wrapped_line in ipairs(wrapped) do
       table.insert(body, wrapped_line)
     end
@@ -264,11 +272,7 @@ local function render_lines(item, end_line)
     table.insert(body, "")
   end
 
-  local width = display_width(title)
-  for _, line in ipairs(body) do
-    width = math.max(width, display_width(line))
-  end
-  width = math.min(width, max_width)
+  width = math.max(width, display_width(title))
 
   local top_fill = math.max(width + 1 - display_width(title), 0)
   local lines = {
@@ -305,12 +309,12 @@ local function connected_layout(item, end_line, bufnr)
   local box = config.box
   local offset = math.max(text_offset(), 0)
   local indent_width = display_width(box.indent or "")
-  local max_width = math.max(config.max_width or 72, 24)
+  local width = comment_content_width()
   local title = ""
   local body = {}
 
   for _, line in ipairs(item.lines or {}) do
-    local wrapped = split_for_width(line, max_width)
+    local wrapped = split_for_width(line, width)
     for _, wrapped_line in ipairs(wrapped) do
       table.insert(body, wrapped_line)
     end
@@ -320,19 +324,7 @@ local function connected_layout(item, end_line, bufnr)
     table.insert(body, "")
   end
 
-  local width = display_width(title)
-  for _, line in ipairs(body) do
-    width = math.max(width, display_width(line))
-  end
-  width = math.min(width, max_width)
-
-  local code_width = 0
-  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-    local lines = vim.api.nvim_buf_get_lines(bufnr, item.start_line - 1, end_line, false)
-    for _, line in ipairs(lines) do
-      code_width = math.max(code_width, display_width(line))
-    end
-  end
+  width = math.max(width, display_width(title))
 
   local marker = config.comment_marker or ""
   local marker_width = display_width(marker)
@@ -341,7 +333,7 @@ local function connected_layout(item, end_line, bufnr)
   local content_prefix_width = math.max(offset - marker_width - marker_gap_width, 0)
   local bridge_width = offset - 1
   local top_bridge = string.rep(box.horizontal, bridge_width)
-  local total_inner_width = math.max(offset + indent_width + width + 2, offset + code_width + 1)
+  local total_inner_width = offset + indent_width + width + 2
   local top_fill = math.max(total_inner_width - display_width(title) - display_width(top_bridge), 0)
   local body_width = math.max(total_inner_width - content_prefix_width - marker_width - marker_gap_width, width)
 
@@ -419,7 +411,7 @@ local function edit_markers(start_line, end_line, prefix)
   prefix = prefix or ""
   local start_title = " comment.nvim " .. range_label(start_line, end_line) .. " "
   local end_title = " comment.nvim end "
-  local width = math.max(display_width(start_title), display_width(end_title))
+  local width = math.max(comment_content_width(), display_width(start_title), display_width(end_title))
   local start_fill = math.max(width + 1 - display_width(start_title), 0)
   local end_fill = math.max(width + 1 - display_width(end_title), 0)
 
@@ -904,7 +896,11 @@ function M.debug()
 end
 
 function M.setup(opts)
+  opts = opts or {}
   config = vim.tbl_deep_extend("force", vim.deepcopy(default_config), opts or {})
+  if opts.comment_width == nil and opts.max_width ~= nil then
+    config.comment_width = opts.max_width
+  end
 
   remember_user_highlights()
   apply_highlights()
