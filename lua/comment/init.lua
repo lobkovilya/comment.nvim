@@ -150,6 +150,24 @@ local function display_width(text)
   return vim.fn.strdisplaywidth(text or "")
 end
 
+local function escape_pattern(text)
+  return tostring(text or ""):gsub("([^%w])", "%%%1")
+end
+
+local function edit_marker_prefix(bufnr)
+  local commentstring = vim.bo[bufnr].commentstring
+  if not commentstring or commentstring == "" then
+    return ""
+  end
+
+  local prefix, suffix = commentstring:match("^(.-)%%s(.*)$")
+  if not prefix or suffix ~= "" then
+    return ""
+  end
+
+  return prefix
+end
+
 local function pad_right(text, width)
   local padding = width - display_width(text)
   if padding <= 0 then
@@ -178,10 +196,18 @@ local function trim_empty_edges(lines)
   return trimmed
 end
 
-local function clean_edit_lines(lines)
+local function strip_edit_prefix(line, prefix)
+  if prefix and prefix ~= "" then
+    line = line:gsub("^%s*" .. escape_pattern(prefix), "", 1)
+  end
+  return line
+end
+
+local function clean_edit_lines(lines, edit)
   local cleaned = {}
 
   for _, line in ipairs(lines) do
+    line = strip_edit_prefix(line, edit and edit.marker_prefix)
     line = line:gsub("^%s*│%s?", "", 1)
     if config.trim_leading_whitespace then
       line = line:gsub("^%s+", "", 1)
@@ -389,7 +415,8 @@ local function connected_render_lines(layout)
   return lines
 end
 
-local function edit_markers(start_line, end_line)
+local function edit_markers(start_line, end_line, prefix)
+  prefix = prefix or ""
   local start_title = " comment.nvim " .. range_label(start_line, end_line) .. " "
   local end_title = " comment.nvim end "
   local width = math.max(display_width(start_title), display_width(end_title))
@@ -397,9 +424,9 @@ local function edit_markers(start_line, end_line)
   local end_fill = math.max(width + 1 - display_width(end_title), 0)
 
   return {
-    start = "╭─" .. start_title .. string.rep("─", start_fill) .. "╮",
-    body = "│ ",
-    finish = "╰─" .. end_title .. string.rep("─", end_fill) .. "╯",
+    start = prefix .. "╭─" .. start_title .. string.rep("─", start_fill) .. "╮",
+    body = prefix .. "│ ",
+    finish = prefix .. "╰─" .. end_title .. string.rep("─", end_fill) .. "╯",
   }
 end
 
@@ -546,7 +573,9 @@ local function find_edit_end_line(bufnr, edit)
   return edit.end_edit_line
 end
 
-local function normalize_edit_text(line, body_marker)
+local function normalize_edit_text(line, edit)
+  local body_marker = edit.body_marker
+  line = strip_edit_prefix(line, edit.marker_prefix)
   line = line:gsub("^%s*│%s?", "", 1)
   if config.trim_leading_whitespace then
     line = line:gsub("^%s+", "", 1)
@@ -576,7 +605,7 @@ local function normalize_edit_block(bufnr)
 
   for lnum = edit.start_edit_line + 1, end_edit_line - 1 do
     local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
-    local normalized = normalize_edit_text(line, edit.body_marker)
+    local normalized = normalize_edit_text(line, edit)
 
     if line ~= normalized then
       vim.api.nvim_buf_set_lines(bufnr, lnum - 1, lnum, false, { normalized })
@@ -672,7 +701,7 @@ local function finish_edit(bufnr, save)
   restore_edit_options(bufnr, edit)
 
   if save then
-    lines = clean_edit_lines(lines)
+    lines = clean_edit_lines(lines, edit)
     if #lines > 0 then
       table.insert(buf_state.comments, {
         id = buf_state.next_id,
@@ -703,7 +732,8 @@ local function start_edit(bufnr, start_line, end_line)
   start_line, end_line = normalize_range(bufnr, start_line, end_line)
   local insert_index = end_line
   local insert_line = end_line + 1
-  local markers = edit_markers(start_line, end_line)
+  local marker_prefix = edit_marker_prefix(bufnr)
+  local markers = edit_markers(start_line, end_line, marker_prefix)
   local cr_keys = vim.api.nvim_replace_termcodes("<CR><C-u>" .. markers.body, true, false, true)
   local edit_options = {
     autoindent = vim.api.nvim_get_option_value("autoindent", { buf = bufnr }),
@@ -737,6 +767,7 @@ local function start_edit(bufnr, start_line, end_line)
     end_marker = markers.finish,
     body_marker = markers.body,
     keymaps = { "<CR>" },
+    marker_prefix = marker_prefix,
     options = edit_options,
     start_edit_line = insert_line,
     start_line = start_line,
@@ -782,11 +813,21 @@ function M.add_range(start_line, end_line)
 end
 
 function M.add_visual()
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
+  local mode = vim.fn.mode()
+  local start_line
+  local end_line
+
+  if mode == "v" or mode == "V" or mode == "\22" then
+    start_line = vim.fn.line("v")
+    end_line = vim.fn.line(".")
+  else
+    start_line = vim.fn.line("'<")
+    end_line = vim.fn.line("'>")
+  end
+
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   vim.schedule(function()
-    M.add_range(start_pos[2], end_pos[2])
+    M.add_range(start_line, end_line)
   end)
 end
 
