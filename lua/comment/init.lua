@@ -2,7 +2,7 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("comment.nvim")
 
-local config = {
+local default_config = {
   comment_position = "below",
   comment_connector = true,
   comment_marker = "💬",
@@ -35,8 +35,11 @@ local config = {
   },
 }
 
+local config = vim.deepcopy(default_config)
+
 local state = {
   buffers = {},
+  mappings = {},
   user_highlights = {},
 }
 
@@ -605,6 +608,35 @@ local function remove_edit_keymaps(bufnr, edit)
   end
 end
 
+local function remove_mappings()
+  for _, mapping in ipairs(state.mappings) do
+    pcall(vim.keymap.del, mapping.mode, mapping.lhs)
+  end
+  state.mappings = {}
+end
+
+local function apply_mappings()
+  remove_mappings()
+
+  if not config.mappings then
+    return
+  end
+
+  local mappings = {
+    { mode = "n", lhs = config.mappings.add, rhs = M.add_line, desc = "Add comment to line" },
+    { mode = "x", lhs = config.mappings.add, rhs = M.add_visual, desc = "Add comment to selection" },
+    { mode = "n", lhs = config.mappings.toggle, rhs = M.toggle, desc = "Toggle comments" },
+    { mode = "n", lhs = config.mappings.delete, rhs = M.delete_at_cursor, desc = "Delete comment at cursor" },
+  }
+
+  for _, mapping in ipairs(mappings) do
+    if mapping.lhs then
+      vim.keymap.set(mapping.mode, mapping.lhs, mapping.rhs, { desc = mapping.desc })
+      table.insert(state.mappings, { mode = mapping.mode, lhs = mapping.lhs })
+    end
+  end
+end
+
 local function restore_edit_options(bufnr, edit)
   if not edit or not edit.options then
     return
@@ -828,7 +860,7 @@ function M.debug()
 end
 
 function M.setup(opts)
-  config = vim.tbl_deep_extend("force", config, opts or {})
+  config = vim.tbl_deep_extend("force", vim.deepcopy(default_config), opts or {})
 
   remember_user_highlights()
   apply_highlights()
@@ -875,13 +907,7 @@ function M.setup(opts)
     M.debug()
   end, {})
 
-  if config.mappings then
-    local map = vim.keymap.set
-    map("n", config.mappings.add, M.add_line, { desc = "Add comment to line" })
-    map("x", config.mappings.add, M.add_visual, { desc = "Add comment to selection" })
-    map("n", config.mappings.toggle, M.toggle, { desc = "Toggle comments" })
-    map("n", config.mappings.delete, M.delete_at_cursor, { desc = "Delete comment at cursor" })
-  end
+  apply_mappings()
 end
 
 return M

@@ -18,9 +18,36 @@ With lazy.nvim:
 ```lua
 {
   "lobkovilya/comment.nvim",
-  config = function()
-    require("comment").setup()
-  end,
+  main = "comment",
+  opts = {},
+}
+```
+
+For lazy-loading from your main plugin setup:
+
+```lua
+{
+  "lobkovilya/comment.nvim",
+  main = "comment",
+  cmd = {
+    "CommentAdd",
+    "CommentAddRange",
+    "CommentToggle",
+    "CommentShow",
+    "CommentHide",
+    "CommentDelete",
+    "CommentClear",
+    "CommentDebug",
+  },
+  keys = {
+    { "<leader>ca", function() require("comment").add_line() end, desc = "Add comment" },
+    { "<leader>ca", function() require("comment").add_visual() end, mode = "x", desc = "Add comment to selection" },
+    { "<leader>ct", function() require("comment").toggle() end, desc = "Toggle comments" },
+    { "<leader>cd", function() require("comment").delete_at_cursor() end, desc = "Delete comment at cursor" },
+  },
+  opts = {
+    mappings = false,
+  },
 }
 ```
 

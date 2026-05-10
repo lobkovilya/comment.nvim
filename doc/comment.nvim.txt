@@ -48,6 +48,15 @@ COMMANDS                                                    *comment.nvim-comman
 ==============================================================================
 CONFIGURATION                                               *comment.nvim-config*
 
+With lazy.nvim:
+>
+{
+  "lobkovilya/comment.nvim",
+  main = "comment",
+  opts = {},
+}
+<
+
 >
 require("comment").setup({
   comment_position = "below",
