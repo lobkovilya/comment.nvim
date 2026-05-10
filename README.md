@@ -75,12 +75,12 @@ Commands:
 :CommentDebug
 ```
 
-When adding a comment, a small editable block is inserted directly below the target line or range:
+When adding a comment, an editable block is inserted directly below the target line or range using the same shape as the rendered comment:
 
 ```text
-╭─ comment.nvim 12 ─╮
-│
-╰─ comment.nvim end ─╯
+╭────────────────────────╮
+│  💬                    │
+╰────────────────────────╯
 ```
 
 Type one or more lines between the top and bottom markers, then leave insert mode to save it. Empty comments are ignored. The editable block is removed from the file and replaced with virtual-line rendering.

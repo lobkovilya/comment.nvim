@@ -117,13 +117,6 @@ local function border_hl()
   return vim.fn.hlexists("CommentNvimBorder") == 1 and "CommentNvimBorder" or text_hl()
 end
 
-local function range_label(start_line, end_line)
-  if start_line == end_line then
-    return "line " .. start_line
-  end
-  return string.format("lines %d-%d", start_line, end_line)
-end
-
 local function sign_for_line(start_line, end_line, lnum, continues_to_comment)
   if config.sign_text then
     return config.sign_text
@@ -162,20 +155,6 @@ local function escape_pattern(text)
   return tostring(text or ""):gsub("([^%w])", "%%%1")
 end
 
-local function edit_marker_prefix(bufnr)
-  local commentstring = vim.bo[bufnr].commentstring
-  if not commentstring or commentstring == "" then
-    return ""
-  end
-
-  local prefix, suffix = commentstring:match("^(.-)%%s(.*)$")
-  if not prefix or suffix ~= "" then
-    return ""
-  end
-
-  return prefix
-end
-
 local function pad_right(text, width)
   local padding = width - display_width(text)
   if padding <= 0 then
@@ -211,12 +190,27 @@ local function strip_edit_prefix(line, prefix)
   return line
 end
 
+local function strip_edit_body(line, edit)
+  line = strip_edit_prefix(line, edit and edit.marker_prefix)
+
+  if edit and edit.body_prefix and edit.body_prefix ~= "" then
+    line = line:gsub("^" .. escape_pattern(edit.body_prefix), "", 1)
+  else
+    line = line:gsub("^%s*│%s?", "", 1)
+  end
+
+  if edit and edit.body_suffix and edit.body_suffix ~= "" then
+    line = line:gsub("%s*" .. escape_pattern(edit.body_suffix) .. "$", "", 1)
+  end
+
+  return line:gsub("%s+$", "")
+end
+
 local function clean_edit_lines(lines, edit)
   local cleaned = {}
 
   for _, line in ipairs(lines) do
-    line = strip_edit_prefix(line, edit and edit.marker_prefix)
-    line = line:gsub("^%s*│%s?", "", 1)
+    line = strip_edit_body(line, edit)
     if config.trim_leading_whitespace then
       line = line:gsub("^%s+", "", 1)
     end
@@ -407,19 +401,110 @@ local function connected_render_lines(layout)
   return lines
 end
 
-local function edit_markers(start_line, end_line, prefix)
-  prefix = prefix or ""
-  local start_title = " comment.nvim " .. range_label(start_line, end_line) .. " "
-  local end_title = " comment.nvim end "
-  local width = math.max(comment_content_width(), display_width(start_title), display_width(end_title))
-  local start_fill = math.max(width + 1 - display_width(start_title), 0)
-  local end_fill = math.max(width + 1 - display_width(end_title), 0)
+local function chunks_text(chunks)
+  local text = ""
+
+  for _, chunk in ipairs(chunks or {}) do
+    text = text .. (chunk[1] or "")
+  end
+
+  return text
+end
+
+local function edit_body_line(markers, text)
+  return markers.body_prefix .. pad_right(text or "", markers.body_width) .. markers.body_suffix
+end
+
+local function edit_markers(start_line, end_line, bufnr)
+  local use_connector = config.comment_connector and config.comment_position == "below"
+
+  if use_connector then
+    local layout = connected_layout({
+      start_line = start_line,
+      end_line = end_line,
+      lines = { "" },
+    }, end_line, bufnr)
+
+    local rendered = connected_render_lines(layout)
+    local marker = layout.marker ~= "" and layout.marker or string.rep(" ", display_width(layout.marker))
+    local body_prefix = layout.box.vertical
+      .. string.rep(" ", math.max(layout.content_prefix_width - 1, 0))
+      .. marker
+      .. layout.marker_gap
+
+    return {
+      start = chunks_text(rendered[1]),
+      body_prefix = body_prefix,
+      body_suffix = " " .. layout.box.vertical,
+      body_width = layout.body_width,
+      finish = chunks_text(rendered[#rendered]),
+      layout = layout,
+      marker_prefix = "",
+    }
+  end
+
+  local box = config.box
+  local width = comment_content_width()
 
   return {
-    start = prefix .. "╭─" .. start_title .. string.rep("─", start_fill) .. "╮",
-    body = prefix .. "│ ",
-    finish = prefix .. "╰─" .. end_title .. string.rep("─", end_fill) .. "╯",
+    start = box.indent .. box.top_left .. string.rep(box.horizontal, width + 2) .. box.top_right,
+    body_prefix = box.indent .. box.vertical .. " ",
+    body_suffix = " " .. box.vertical,
+    body_width = width,
+    finish = box.indent .. box.bottom_left .. string.rep(box.horizontal, width + 2) .. box.bottom_right,
+    marker_prefix = "",
   }
+end
+
+local function render_edit_context(bufnr, start_line, end_line, markers)
+  local layout = markers and markers.layout
+  if not layout then
+    return
+  end
+
+  vim.api.nvim_buf_set_extmark(bufnr, ns, start_line - 1, 0, {
+    virt_lines = connected_top_lines(layout),
+    virt_lines_above = true,
+    virt_lines_leftcol = true,
+    right_gravity = false,
+  })
+
+  if not config.signs and not config.range_highlight then
+    return
+  end
+
+  for lnum = start_line, end_line do
+    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
+    local opts = {}
+
+    if config.signs then
+      opts.sign_text = sign_for_line(start_line, end_line, lnum, true)
+      opts.sign_hl_group = sign_hl()
+    end
+
+    if config.range_highlight then
+      opts.line_hl_group = range_hl()
+      opts.number_hl_group = range_number_hl()
+      opts.priority = config.range_highlight_priority
+    end
+
+    if opts.sign_text or opts.line_hl_group then
+      vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, opts)
+    end
+
+    if config.signs and config.right_bezel then
+      add_right_bezel(bufnr, lnum, layout)
+    end
+
+    if config.range_highlight and line ~= "" then
+      vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+        end_col = #line,
+        hl_eol = true,
+        hl_group = range_text_hl(),
+        priority = config.range_highlight_priority,
+      })
+    end
+  end
 end
 
 local function render(bufnr)
@@ -566,13 +651,11 @@ local function find_edit_end_line(bufnr, edit)
 end
 
 local function normalize_edit_text(line, edit)
-  local body_marker = edit.body_marker
-  line = strip_edit_prefix(line, edit.marker_prefix)
-  line = line:gsub("^%s*│%s?", "", 1)
+  line = strip_edit_body(line, edit)
   if config.trim_leading_whitespace then
     line = line:gsub("^%s+", "", 1)
   end
-  return body_marker .. line
+  return edit_body_line(edit, line)
 end
 
 local function normalize_edit_block(bufnr)
@@ -611,7 +694,9 @@ local function normalize_edit_block(bufnr)
 
   if cursor and changed_cursor_line and vim.api.nvim_win_is_valid(winid) then
     local line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], false)[1] or ""
-    local col = math.max(#edit.body_marker, cursor[2] + cursor_delta)
+    local content = strip_edit_body(line, edit)
+    local col = #edit.body_prefix + #content
+    col = math.max(#edit.body_prefix, math.max(col, cursor[2] + cursor_delta))
     col = math.min(col, #line)
     vim.api.nvim_win_set_cursor(winid, { cursor[1], col })
   end
@@ -724,9 +809,8 @@ local function start_edit(bufnr, start_line, end_line)
   start_line, end_line = normalize_range(bufnr, start_line, end_line)
   local insert_index = end_line
   local insert_line = end_line + 1
-  local marker_prefix = edit_marker_prefix(bufnr)
-  local markers = edit_markers(start_line, end_line, marker_prefix)
-  local cr_keys = vim.api.nvim_replace_termcodes("<CR><C-u>" .. markers.body, true, false, true)
+  local markers = edit_markers(start_line, end_line, bufnr)
+  local cr_keys = vim.api.nvim_replace_termcodes("<CR><C-u>" .. markers.body_prefix, true, false, true)
   local edit_options = {
     autoindent = vim.api.nvim_get_option_value("autoindent", { buf = bufnr }),
     cindent = vim.api.nvim_get_option_value("cindent", { buf = bufnr }),
@@ -736,7 +820,7 @@ local function start_edit(bufnr, start_line, end_line)
 
   vim.api.nvim_buf_set_lines(bufnr, insert_index, insert_index, false, {
     markers.start,
-    markers.body,
+    edit_body_line(markers, ""),
     markers.finish,
   })
 
@@ -745,8 +829,8 @@ local function start_edit(bufnr, start_line, end_line)
   vim.api.nvim_set_option_value("indentexpr", "", { buf = bufnr })
   vim.api.nvim_set_option_value("smartindent", false, { buf = bufnr })
 
-  vim.api.nvim_win_set_cursor(0, { insert_line + 1, #markers.body })
-  vim.cmd("startinsert!")
+  vim.api.nvim_win_set_cursor(0, { insert_line + 1, #markers.body_prefix })
+  vim.cmd("startinsert")
 
   local augroup = vim.api.nvim_create_augroup("CommentNvimEdit" .. bufnr, { clear = true })
   buf_state.editing = {
@@ -757,14 +841,18 @@ local function start_edit(bufnr, start_line, end_line)
     end_line = end_line,
     end_edit_line = insert_line + 2,
     end_marker = markers.finish,
-    body_marker = markers.body,
+    body_prefix = markers.body_prefix,
+    body_suffix = markers.body_suffix,
+    body_width = markers.body_width,
     keymaps = { "<CR>" },
-    marker_prefix = marker_prefix,
+    marker_prefix = markers.marker_prefix,
     options = edit_options,
     start_edit_line = insert_line,
     start_line = start_line,
     winid = vim.api.nvim_get_current_win(),
   }
+
+  render_edit_context(bufnr, start_line, end_line, markers)
 
   vim.keymap.set("i", "<CR>", function()
     return cr_keys
