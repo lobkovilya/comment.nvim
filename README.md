@@ -64,6 +64,9 @@ Type one or more lines between the top and bottom markers, then leave insert mod
 require("comment").setup({
   comment_position = "below",
   comment_connector = true,
+  comment_marker = "💬",
+  right_bezel = true,
+  right_bezel_offset = -1,
   signs = true,
   range_highlight = false,
   range_highlight_priority = 180,

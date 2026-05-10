@@ -5,6 +5,9 @@ local ns = vim.api.nvim_create_namespace("comment.nvim")
 local config = {
   comment_position = "below",
   comment_connector = true,
+  comment_marker = "💬",
+  right_bezel = true,
+  right_bezel_offset = -1,
   signs = true,
   range_highlight = false,
   range_highlight_priority = 180,
@@ -38,12 +41,12 @@ local state = {
 }
 
 local default_highlights = {
-  CommentNvimBorder = { fg = "#9e917e", bg = "#4a3728" },
+  CommentNvimBorder = { fg = "#9e917e" },
   CommentNvimRange = { bg = "#4a3728" },
   CommentNvimRangeNumber = { fg = "#ffd166", bg = "#4a3728", bold = true },
   CommentNvimRangeText = { bg = "#5a402d" },
   CommentNvimSign = { link = "Comment" },
-  CommentNvimText = { fg = "#b8afa3", bg = "#4a3728" },
+  CommentNvimText = { fg = "#b8afa3" },
 }
 
 local function get_buf_state(bufnr)
@@ -218,7 +221,7 @@ end
 local function render_lines(item, end_line)
   local box = config.box
   local max_width = math.max(config.max_width or 72, 24)
-  local title = " comment " .. range_label(item.start_line, end_line) .. " "
+  local title = ""
   local body = {}
 
   for _, line in ipairs(item.lines or {}) do
@@ -274,7 +277,7 @@ local function connected_layout(item, end_line, bufnr)
   local offset = math.max(text_offset(), 0)
   local indent_width = display_width(box.indent or "")
   local max_width = math.max(config.max_width or 72, 24)
-  local title = " comment " .. range_label(item.start_line, end_line) .. " "
+  local title = ""
   local body = {}
 
   for _, line in ipairs(item.lines or {}) do
@@ -302,29 +305,53 @@ local function connected_layout(item, end_line, bufnr)
     end
   end
 
-  local content_prefix_width = offset + indent_width + 2
-  local bridge_width = offset + indent_width
+  local marker = config.comment_marker or ""
+  local marker_width = display_width(marker)
+  local marker_gap = marker ~= "" and " " or ""
+  local marker_gap_width = display_width(marker_gap)
+  local content_prefix_width = math.max(offset - marker_width - marker_gap_width, 0)
+  local bridge_width = offset - 1
   local top_bridge = string.rep(box.horizontal, bridge_width)
   local total_inner_width = math.max(offset + indent_width + width + 2, offset + code_width + 1)
   local top_fill = math.max(total_inner_width - display_width(title) - display_width(top_bridge), 0)
-  local body_width = math.max(total_inner_width - content_prefix_width, width)
+  local body_width = math.max(total_inner_width - content_prefix_width - marker_width - marker_gap_width, width)
 
   return {
     body_width = body_width,
     body = body,
     box = box,
     content_prefix_width = content_prefix_width,
+    marker = marker,
+    marker_gap = marker_gap,
     title = title,
     top_bridge = top_bridge,
     top_fill = top_fill,
     total_inner_width = total_inner_width,
     width = width,
+    right_border_col = math.max(total_inner_width + 1 - offset + (config.right_bezel_offset or 0), 1),
   }
 end
 
-local function connected_top_lines(item, end_line, bufnr)
-  local layout = connected_layout(item, end_line, bufnr)
+local function add_right_bezel(bufnr, lnum, layout)
+  local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
+  local current_width = display_width(line)
+  local target_col = layout.right_border_col
 
+  if current_width >= target_col then
+    return
+  end
+
+  vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+    virt_text = {
+      { string.rep(" ", target_col - current_width), "Normal" },
+      { layout.box.vertical or "│", border_hl() },
+    },
+    virt_text_pos = "eol",
+    priority = config.range_highlight_priority,
+  })
+end
+
+local function connected_top_lines(layout)
   return {
     {
       { layout.box.top_left .. string.rep(layout.box.horizontal, layout.total_inner_width) .. layout.box.top_right, border_hl() },
@@ -332,18 +359,21 @@ local function connected_top_lines(item, end_line, bufnr)
   }
 end
 
-local function connected_render_lines(item, end_line, bufnr)
-  local layout = connected_layout(item, end_line, bufnr)
+local function connected_render_lines(layout)
   local box = layout.box
   local lines = {
     {
-      { box.vertical .. layout.top_bridge .. layout.title .. string.rep(box.horizontal, layout.top_fill) .. box.top_right, border_hl() },
+      { box.vertical .. layout.top_bridge .. layout.title .. string.rep(box.horizontal, layout.top_fill) .. "┤", border_hl() },
     },
   }
 
-  for _, line in ipairs(layout.body) do
+  for index, line in ipairs(layout.body) do
+    local marker = index == 1 and layout.marker or string.rep(" ", display_width(layout.marker))
+
     table.insert(lines, {
       { box.vertical .. string.rep(" ", math.max(layout.content_prefix_width - 1, 0)), border_hl() },
+      { marker, text_hl() },
+      { layout.marker_gap, text_hl() },
       { pad_right(line, layout.body_width), text_hl() },
       { " " .. box.vertical, border_hl() },
     })
@@ -391,10 +421,11 @@ local function render(bufnr)
       local anchor_line = config.comment_position == "below" and end_line or item.start_line
       local lines = render_lines(item, end_line)
       local use_connector = config.comment_connector and config.comment_position == "below"
+      local connector_layout = use_connector and connected_layout(item, end_line, bufnr) or nil
 
       if use_connector then
         vim.api.nvim_buf_set_extmark(bufnr, ns, item.start_line - 1, 0, {
-          virt_lines = connected_top_lines(item, end_line, bufnr),
+          virt_lines = connected_top_lines(connector_layout),
           virt_lines_above = true,
           virt_lines_leftcol = true,
           right_gravity = false,
@@ -402,7 +433,7 @@ local function render(bufnr)
       end
 
       vim.api.nvim_buf_set_extmark(bufnr, ns, anchor_line - 1, 0, {
-        virt_lines = use_connector and connected_render_lines(item, end_line, bufnr) or lines,
+        virt_lines = use_connector and connected_render_lines(connector_layout) or lines,
         virt_lines_above = config.comment_position ~= "below",
         virt_lines_leftcol = use_connector,
         right_gravity = false,
@@ -423,6 +454,10 @@ local function render(bufnr)
           end
 
           vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, opts)
+
+          if use_connector and config.right_bezel and connector_layout then
+            add_right_bezel(bufnr, lnum, connector_layout)
+          end
 
           if config.range_highlight and line ~= "" then
             vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
